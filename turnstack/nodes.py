@@ -245,17 +245,23 @@ class Confirm(BaseNode):
                  ``(collected: dict) -> str`` that receives the current
                  ``session.collected`` so you can interpolate collected values.
         options: List of :class:`Option` objects (typically Yes / Edit / Cancel).
-                 Rendered as WhatsApp reply buttons (max 3).
+                 Rendered as WhatsApp reply buttons (**max 3**).
         allow_numeric: Also accept digit input. Default: False.
     """
     text: Union[str, Callable[[Dict[str, Any]], str]]
     options: List[Option]
     allow_numeric: bool = False
 
+    def __post_init__(self):
+        if len(self.options) > 3:
+            raise ValueError(
+                f"Confirm node can have at most 3 options (WhatsApp button limit), got {len(self.options)}."
+            )
+
     def to_dict(self) -> NodeDict:
         return {
             "type": "confirm",
-            "text": self.text,  # callable kept as-is; engine calls it at render time
+            "text": self.text,
             "options": [o.to_dict() for o in self.options],
             "allow_numeric": self.allow_numeric,
         }
@@ -319,34 +325,54 @@ class ListNode(BaseNode):
     Render a dynamic list of items fetched at runtime (from DB, API, etc.)
     with automatic pagination.
 
+    Two modes:
+    - Simple: `fetch(session)` returns a full list of all items.
+    - Paginated: `fetch(session, page, page_size)` returns either:
+        * a tuple (items_for_page, total_count)
+        * a dict {"items": [...], "total": N}
+      In this mode, the engine will not fetch all items, only the current page.
+
     When ``interactive=True``, the list is sent as a WhatsApp interactive
-    list message. Pagination and extra options become buttons inside the list.
-    Otherwise, a plain text list with typed commands is used.
+    list message. Pagination buttons appear automatically and consume only
+    as many rows as needed (1 for first/last page, 2 for middle pages).
+    Extra options are shown **only on the last page** if space permits.
 
     Args:
-        fetch:           Callable ``(session: Session) -> list``.
+        fetch:           Callable. In simple mode: ``(session) -> list``.
+                         In paginated mode: ``(session, page, page_size) -> (list, int) | dict``.
         item_label:      Callable ``(item: Any) -> str`` for display label.
         on_select:       Node to go to when an item is selected.
-        title:           Heading shown above the list.
-        page_size:       Items per page. Default: 5.
+        title:           Heading shown above the list (no automatic page number).
         empty_text:      Text shown when the list is empty.
         item_description: Optional subtitle callable.
-        extra_options:   Static :class:`Option` list appended at the end
-                         (e.g., Add New Property). Default: [].
+        extra_options:   Static :class:`Option` list (max 3). Shown only on the last page.
         interactive:     If True, render as interactive list; else plain text.
-        button_label:    Custom label for the interactive list button
-                         (e.g., "Select Property"). Default: "Options".
+        button_label:    Custom label for the interactive list button.
+        page_size:       Number of items per page (default: 8, but may be adjusted
+                         to fit WhatsApp limit). If paginated fetch is used, this is
+                         passed to the fetch function.
     """
-    fetch: Callable[..., List[Any]]
+    fetch: Callable[..., Any]  # signature depends on mode
     item_label: Callable[[Any], str]
     on_select: str
     title: str = "Select an option"
-    page_size: int = 5
     empty_text: str = "No items available."
     item_description: Optional[Callable[[Any], str]] = None
     extra_options: List[Option] = field(default_factory=list)
     interactive: bool = False
     button_label: str = "Options"
+    page_size: int = 8  # default, but will be clamped
+
+    def __post_init__(self):
+        if self.interactive and len(self.extra_options) > 3:
+            raise ValueError(
+                f"ListNode interactive mode supports at most 3 extra_options, got {len(self.extra_options)}."
+            )
+        # Page size cannot exceed 10 (WhatsApp limit) and cannot be < 1
+        if self.page_size < 1:
+            self.page_size = 1
+        if self.page_size > 10:
+            self.page_size = 10
 
     def to_dict(self) -> NodeDict:
         return {
@@ -355,12 +381,12 @@ class ListNode(BaseNode):
             "item_label": self.item_label,
             "on_select": self.on_select,
             "title": self.title,
-            "page_size": self.page_size,
             "empty_text": self.empty_text,
             "item_description": self.item_description,
             "extra_options": [opt.to_dict() for opt in self.extra_options],
             "interactive": self.interactive,
             "button_label": self.button_label,
+            "page_size": self.page_size,
         }
 
 

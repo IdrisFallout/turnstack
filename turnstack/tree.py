@@ -112,13 +112,20 @@ class FlowTree:
         for node_name, node in self._nodes.items():
             t = node.get("type", "")
 
+            # Existing checks
             if t in _SINGLE_NEXT:
                 self._check_ref(node_name, node.get("next"), errors)
 
             elif t in _OPTION_NEXT:
-                for opt in node.get("options", []):
+                options = node.get("options", [])
+                if t == NODE_CONFIRM and len(options) > 3:
+                    errors.append(
+                        f"Confirm node '{node_name}' has {len(options)} options. "
+                        "WhatsApp interactive buttons support at most 3."
+                    )
+                for opt in options:
                     target = opt.get("next") if isinstance(opt, dict) else None
-                    self._check_ref(f"{node_name} option '{opt.get('label','?')}'", target, errors)
+                    self._check_ref(f"{node_name} option '{opt.get('label', '?')}'", target, errors)
 
             elif t == NODE_ROUTER:
                 self._check_ref(f"{node_name} default", node.get("default"), errors)
@@ -127,6 +134,12 @@ class FlowTree:
 
             elif t == NODE_LIST:
                 self._check_ref(f"{node_name} on_select", node.get("on_select"), errors)
+                extra_opts = node.get("extra_options", [])
+                if len(extra_opts) > 3:
+                    errors.append(
+                        f"ListNode '{node_name}' has {len(extra_opts)} extra_options, "
+                        "but interactive lists support at most 3 static actions."
+                    )
 
         if errors:
             raise FlowValidationError(

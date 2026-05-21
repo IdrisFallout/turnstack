@@ -15,6 +15,7 @@ Key responsibilities:
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
+import inspect
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..message import IncomingMessage
@@ -130,9 +131,60 @@ class NodeHandler(ABC):
         if t == "multi_input":
             return self._render_multi_input(node, session)
         if t == "list":
-            # list rendering is delegated to ListHandler
-            from .list_handler import ListHandler
-            return ListHandler()._render_list_page(node, session)
+            from .list_handler import ListHandler, MAX_ROWS
+
+            fetch = node.get("fetch")
+            if not fetch:
+                return self._error(session, "ListNode has no 'fetch' function.")
+
+            page_size = node.get("page_size", 8)
+            page_size = min(MAX_ROWS, max(1, page_size))
+            interactive = node.get("interactive", False)
+
+            # Detect paginated mode (fetch accepts 3 arguments)
+            sig = inspect.signature(fetch)
+            paginated_mode = len(sig.parameters) >= 3
+
+            pkey = f"list_{session.current_node}_page"
+            page = session.pagination.get(pkey, 0)
+
+            # Fetch data for the current page
+            if paginated_mode:
+                # Note: _render is synchronous; we assume fetch is synchronous here.
+                # Async paginated fetches are handled properly in ListHandler.handle.
+                try:
+                    result = fetch(session, page, page_size)
+                except Exception as exc:
+                    return self._error(session, f"Paginated fetch raised: {exc}")
+
+                if isinstance(result, tuple) and len(result) == 2:
+                    items_page, total_items = result
+                elif isinstance(result, dict):
+                    items_page = result.get("items", [])
+                    total_items = result.get("total", 0)
+                else:
+                    return self._error(session, "Paginated fetch must return (items, total) or dict with 'items' and 'total'")
+                items_page = list(items_page or [])
+            else:
+                # Simple mode: fetch all items
+                try:
+                    items = fetch(session)
+                except Exception as exc:
+                    return self._error(session, f"Fetch raised: {exc}")
+                items = list(items or [])
+                total_items = len(items)
+                start = page * page_size
+                items_page = items[start: start + page_size]
+
+            total_pages = max(1, (total_items + page_size - 1) // page_size)
+            if page >= total_pages:
+                page = total_pages - 1 if total_pages > 0 else 0
+                session.pagination[pkey] = page
+                # For simple mode, we could re-slice; for paginated mode we ignore re-fetch
+
+            return ListHandler()._render_list_page(
+                node, session, items_page, page, total_pages, interactive, page_size, paginated_mode
+            )
 
         return self._error(session, f"Cannot render node type '{t}'.")
 
@@ -140,7 +192,6 @@ class NodeHandler(ABC):
         text = node.get("text", "")
         options = node.get("options", [])
         button_label = node.get("button_label", "Options")
-        print(f"DEBUG: button_label = {button_label}")
 
         # Build the reply options (used by WhatsApp adapter)
         reply_options = []
@@ -158,6 +209,7 @@ class NodeHandler(ABC):
             options=reply_options,
             node_type="menu",
             current_node=session.current_node,
+            session_state=session.lifecycle_state,
             meta={"button_label": button_label},
         )
 
@@ -175,12 +227,13 @@ class NodeHandler(ABC):
 
         return Reply(
             type="text",
-            body=body,  # only the prompt, no numbered list
-            phone=session.user_id,  # use user_id consistently
+            body=body,
+            phone=session.user_id,
             options=reply_options,
             node_type="confirm",
             suggested_replies=[o.value for o in reply_options],
             current_node=session.current_node,
+            session_state=session.lifecycle_state,
         )
 
     def _render_input(self, node: Dict[str, Any], session: Session) -> Reply:
@@ -190,6 +243,7 @@ class NodeHandler(ABC):
             phone=session.user_id,
             node_type="input",
             current_node=session.current_node,
+            session_state=session.lifecycle_state,
         )
 
     def _render_multi_input(self, node: Dict[str, Any], session: Session) -> Reply:
@@ -211,8 +265,14 @@ class NodeHandler(ABC):
             phone=session.user_id,
             node_type="multi_input",
             current_node=session.current_node,
+            session_state=session.lifecycle_state,
         )
 
     def _error(self, session: Session, msg: str) -> Reply:
-        return Reply(type="error", body=msg, phone=session.user_id,
-                     current_node=session.current_node)
+        return Reply(
+            type="error",
+            body=msg,
+            phone=session.user_id,
+            current_node=session.current_node,
+            session_state=session.lifecycle_state,
+        )

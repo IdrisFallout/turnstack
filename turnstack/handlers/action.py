@@ -60,7 +60,7 @@ class ActionHandler(NodeHandler):
             return Reply(type="end", body=body, phone=session.user_id,
                          current_node=session.current_node)
 
-        if next_key == session.tree_entry if hasattr(session, "tree_entry") else next_key == "welcome":
+        if next_key == tree.entry:
             session.collected = {}
 
         self._transition_to(session, next_key)
@@ -68,6 +68,8 @@ class ActionHandler(NodeHandler):
         # ── build the combined reply ──────────────────────────────────
         # Enter next node (may chain another action/router silently)
         next_reply = await self._enter_node(session, tree, _depth + 1)
+        if next_reply is None:
+            next_reply = self._error(session, "Next node returned no reply.")
 
         if isinstance(result, Reply):
             # Developer returned a full Reply — send it, then queue next render

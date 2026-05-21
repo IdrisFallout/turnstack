@@ -70,7 +70,7 @@ class BotEngine:
 
         # Global command keywords (case‑insensitive)
         self.back_keywords = back_keywords or {"0", "back", "go back"}
-        self.home_keywords = home_keywords or {"00", "home", "main menu", "start over"}
+        self.home_keywords = home_keywords or {"00", "home", "menu", "start over"}
         self.exit_keywords = exit_keywords or {"000", "exit", "quit", "reset", "goodbye", "bye"}
 
         # validate tree on startup — fail loud, not silent

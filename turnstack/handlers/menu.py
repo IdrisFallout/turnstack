@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from ..message import IncomingMessage
 from ..reply import Reply, ReplyOption
 from ..session import Session
-from .base import NodeHandler, BACK_KEYWORDS, HOME_KEYWORDS
+from .base import NodeHandler
 
 if TYPE_CHECKING:
     from ..tree import FlowTree
@@ -48,16 +48,6 @@ class MenuHandler(NodeHandler):
         # ── nothing yet — first render ────────────────────────────────
         if not raw_input:
             return self._render_menu_page(node, session, all_options, page, total_pages)
-
-        lower = raw_input.lower()
-
-        # ── back / home navigation ────────────────────────────────────
-        if lower in BACK_KEYWORDS:
-            self._go_back(session, tree.entry)
-            return await self._enter_node(session, tree)
-        if lower in HOME_KEYWORDS:
-            self._go_home(session, tree.entry)
-            return await self._enter_node(session, tree)
 
         # ── interactive pagination ────────────────────────────────────
         if message.interactive_id == PREV_PAGE:

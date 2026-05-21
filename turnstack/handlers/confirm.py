@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from ..message import IncomingMessage
 from ..reply import Reply
 from ..session import Session
-from .base import NodeHandler, BACK_KEYWORDS, HOME_KEYWORDS
+from .base import NodeHandler
 
 if TYPE_CHECKING:
     from ..tree import FlowTree
@@ -24,15 +24,6 @@ class ConfirmHandler(NodeHandler):
 
         if not raw:
             return self._render_confirm(node, session)
-
-        lower = raw.lower()
-
-        if lower in BACK_KEYWORDS:
-            self._go_back(session, tree.entry)
-            return await self._enter_node(session, tree)
-        if lower in HOME_KEYWORDS:
-            self._go_home(session, tree.entry)
-            return await self._enter_node(session, tree)
 
         matched_next = self._match_option(node, message, raw)
 

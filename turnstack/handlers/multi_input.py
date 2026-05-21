@@ -4,7 +4,7 @@ from typing import Any, Dict, TYPE_CHECKING
 from ..message import IncomingMessage
 from ..reply import Reply
 from ..session import Session
-from .base import NodeHandler, BACK_KEYWORDS, HOME_KEYWORDS
+from .base import NodeHandler
 
 if TYPE_CHECKING:
     from ..tree import FlowTree
@@ -31,27 +31,6 @@ class MultiInputHandler(NodeHandler):
         idx_key = f"mi_{session.current_node}_idx"
         idx     = session.pagination.get(idx_key, 0)
         raw     = (message.text or "").strip()
-
-        # ── back / home ───────────────────────────────────────────────
-        if raw.lower() in HOME_KEYWORDS:
-            session.pagination.pop(idx_key, None)
-            self._go_home(session, tree.entry)
-            return await self._enter_node(session, tree)
-
-        if raw.lower() in BACK_KEYWORDS:
-            if idx > 0:
-                # step back one field within the form
-                idx -= 1
-                session.pagination[idx_key] = idx
-                # remove previously stored value
-                field_name = fields[idx].get("name")
-                session.collected.pop(field_name, None)
-                return self._render_field(node, session, fields, idx)
-            else:
-                # at first field — go back to previous node
-                session.pagination.pop(idx_key, None)
-                self._go_back(session, tree.entry)
-                return await self._enter_node(session, tree)
 
         # ── first entry — no input yet ────────────────────────────────
         if not raw:

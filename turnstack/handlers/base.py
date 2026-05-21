@@ -25,12 +25,6 @@ from ..session import Session
 if TYPE_CHECKING:
     from ..tree import FlowTree
 
-
-# ── navigation keywords recognised in any input field ────────────────────────
-BACK_KEYWORDS = {"0", "back", "go back"}
-HOME_KEYWORDS = {"00", "home", "main menu", "start over"}
-
-
 class NodeHandler(ABC):
     """Abstract handler for a single node type."""
 

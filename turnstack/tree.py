@@ -21,10 +21,10 @@ NODE_ACTION      = "action"
 NODE_ROUTER      = "router"
 NODE_LIST        = "list"
 NODE_MEDIA       = "media"
-NODE_MULTI_INPUT = "multi_input"
+NODE_INPUT = "input"
 
 # All types that have a single "next" key
-_SINGLE_NEXT = {NODE_INPUT, NODE_ACTION, NODE_MEDIA, NODE_MULTI_INPUT}
+_SINGLE_NEXT = {NODE_INPUT, NODE_ACTION, NODE_MEDIA, NODE_INPUT}
 # All types that have options with individual "next" keys
 _OPTION_NEXT = {NODE_MENU, NODE_CONFIRM}
 

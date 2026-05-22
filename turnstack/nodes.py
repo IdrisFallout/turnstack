@@ -81,7 +81,7 @@ class Option:
 @dataclass
 class Field:
     """
-    A single input field inside a MultiInput node.
+    A single input field inside a Input node.
 
     Args:
         name:      Key under which the collected value is stored in session.collected.
@@ -173,43 +173,6 @@ class Menu(BaseNode):
 @dataclass
 class Input(BaseNode):
     """
-    Prompt the user for a single piece of free-text input.
-
-    Args:
-        prompt:    Question shown to the user.
-        field:     Key under which the value is stored in ``session.collected``.
-        next:      Node key to navigate to after valid input is received.
-        validate:  Optional callable ``(value: str) -> Optional[str]``.
-                   Return an error string to reject, or None to accept.
-        transform: Optional callable ``(value: str) -> Any`` applied before storing.
-                   Example: ``str.strip``, ``str.lower``, ``lambda v: v.title()``.
-        placeholder: Hint shown alongside the prompt (not sent to WhatsApp, used in UI sims).
-    """
-    prompt: str
-    field: str
-    next: str
-    validate: Optional[Callable[[str], Optional[str]]] = None
-    transform: Optional[Callable[[str], Any]] = None
-    placeholder: str = ""
-
-    def to_dict(self) -> NodeDict:
-        d: NodeDict = {
-            "type": "input",
-            "prompt": self.prompt,
-            "field": self.field,
-            "next": self.next,
-            "placeholder": self.placeholder,
-        }
-        if self.validate:
-            d["validate"] = self.validate
-        if self.transform:
-            d["transform"] = self.transform
-        return d
-
-
-@dataclass
-class MultiInput(BaseNode):
-    """
     Collect several fields in sequence, owned by a single logical form node.
 
     The engine walks through ``fields`` one at a time, storing each value in
@@ -228,7 +191,7 @@ class MultiInput(BaseNode):
 
     def to_dict(self) -> NodeDict:
         return {
-            "type": "multi_input",
+            "type": "input",
             "fields": [f.to_dict() for f in self.fields],
             "next": self.next,
             "intro": self.intro,
@@ -437,7 +400,7 @@ __all__ = [
     "Route",
     "Menu",
     "Input",
-    "MultiInput",
+    "Input",
     "Confirm",
     "Action",
     "Router",

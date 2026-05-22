@@ -21,7 +21,7 @@ class Session:
     nav_stack:       Back-navigation history.  The engine pushes before
                      every forward transition and pops on "go back".
                      Developers should not modify this directly.
-    collected:       Data gathered via Input / MultiInput nodes.
+    collected:       Data gathered via Input nodes.
                      Cleared when the session returns to the entry node.
     pagination:      Internal state for ListNode pagination.
     context:         Arbitrary dict for cross-node data.

@@ -9,9 +9,16 @@ from .base import NodeHandler
 if TYPE_CHECKING:
     from ..tree import FlowTree
 
+_IDX_KEY = "mi_{node}_idx"
+
 
 class InputHandler(NodeHandler):
-    """Handles ``input`` nodes — single free-text field collection."""
+    """
+    Handles ``input`` nodes.
+
+    Walks through the ``fields`` list one at a time, validating and storing
+    each value, then advances to ``next`` when all fields are collected.
+    """
 
     async def handle(
         self,
@@ -20,29 +27,61 @@ class InputHandler(NodeHandler):
         message: IncomingMessage,
         tree: "FlowTree",
     ) -> Reply:
-        raw = (message.text or "").strip()
+        fields  = node.get("fields", [])
+        idx_key = f"mi_{session.current_node}_idx"
+        idx     = session.pagination.get(idx_key, 0)
+        raw     = (message.text or "").strip()
 
-        # ── first render (no input yet) ───────────────────────────────
+        # ── first entry — no input yet ────────────────────────────────
         if not raw:
-            return self._render_input(node, session)
+            if idx == 0:
+                session.pagination[idx_key] = 0
+            return self._render_field(node, session, fields, idx)
 
-        # ── validate ──────────────────────────────────────────────────
-        validate = node.get("validate")
+        # ── validate current field ────────────────────────────────────
+        current_field = fields[idx]
+        validate = current_field.get("validate")
         if validate:
             error = validate(raw)
             if error:
                 return Reply(
                     type="text",
-                    body=f"⚠️ {error}\n\n{node.get('prompt', '')}",
+                    body=f"⚠️ {error}\n\n{current_field.get('prompt', '')}",
                     phone=session.user_id,
                     node_type="input",
                     current_node=session.current_node,
                 )
 
-        # ── transform and store ───────────────────────────────────────
-        transform = node.get("transform", lambda v: v)
-        session.collected[node["field"]] = transform(raw)
+        # ── store ─────────────────────────────────────────────────────
+        transform = current_field.get("transform", lambda v: v)
+        session.collected[current_field["name"]] = transform(raw)
+        idx += 1
+        session.pagination[idx_key] = idx
 
-        # ── advance ───────────────────────────────────────────────────
-        self._transition_to(session, node["next"])
-        return await self._enter_node(session, tree)
+        # ── advance to next field or finish ───────────────────────────
+        if idx >= len(fields):
+            session.pagination.pop(idx_key, None)
+            self._transition_to(session, node["next"])
+            return await self._enter_node(session, tree)
+
+        return self._render_field(node, session, fields, idx)
+
+    def _render_field(self, node, session, fields, idx) -> Reply:
+        f = fields[idx]
+        prompt = f.get("prompt", "")
+        # Add intro only on first field
+        if idx == 0:
+            intro = node.get("intro", "")
+            if intro:
+                prompt = intro + "\n\n" + prompt
+        # Only show progress (1/3) if more than one field total
+        total = len(fields)
+        if total > 1:
+            prompt = f"({idx + 1}/{total}) " + prompt
+        return Reply(
+            type="text",
+            body=prompt,
+            phone=session.user_id,
+            node_type="input",
+            current_node=session.current_node,
+        )

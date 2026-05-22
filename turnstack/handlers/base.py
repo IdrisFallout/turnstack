@@ -122,8 +122,8 @@ class NodeHandler(ABC):
             return self._render_confirm(node, session)
         if t == "input":
             return self._render_input(node, session)
-        if t == "multi_input":
-            return self._render_multi_input(node, session)
+        if t == "input":
+            return self._render_input(node, session)
         if t == "list":
             from .list_handler import ListHandler, MAX_ROWS
 
@@ -240,13 +240,13 @@ class NodeHandler(ABC):
             session_state=session.lifecycle_state,
         )
 
-    def _render_multi_input(self, node: Dict[str, Any], session: Session) -> Reply:
-        """Render the current field inside a multi_input node."""
+    def _render_input(self, node: Dict[str, Any], session: Session) -> Reply:
+        """Render the current field inside a input node."""
         fields = node.get("fields", [])
         idx = session.pagination.get(f"mi_{session.current_node}_idx", 0)
         if idx >= len(fields):
             # all fields collected — should not normally reach here
-            return self._error(session, "MultiInput: field index out of range.")
+            return self._error(session, "Input: field index out of range.")
         f = fields[idx]
         prompt = f.get("prompt", "")
         if idx == 0:
@@ -257,7 +257,7 @@ class NodeHandler(ABC):
             type="text",
             body=prompt,
             phone=session.user_id,
-            node_type="multi_input",
+            node_type="input",
             current_node=session.current_node,
             session_state=session.lifecycle_state,
         )

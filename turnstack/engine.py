@@ -19,16 +19,15 @@ from .stores.memory import InMemorySessionStore
 from .tree import (
     FlowTree,
     NODE_MENU, NODE_INPUT, NODE_CONFIRM, NODE_ACTION,
-    NODE_ROUTER, NODE_LIST, NODE_MEDIA, NODE_MULTI_INPUT,
+    NODE_ROUTER, NODE_LIST, NODE_MEDIA, NODE_INPUT,
 )
 from .handlers.base import NodeHandler
 from .handlers.menu import MenuHandler
-from .handlers.input import InputHandler
 from .handlers.confirm import ConfirmHandler
 from .handlers.action import ActionHandler
 from .handlers.router import RouterHandler
 from .handlers.list_handler import ListHandler
-from .handlers.multi_input import MultiInputHandler
+from .handlers.input import InputHandler
 from .handlers.media_handler import MediaHandler
 
 
@@ -79,12 +78,11 @@ class BotEngine:
         # ── default handler registry ──────────────────────────────────
         self._handlers: Dict[str, NodeHandler] = {
             NODE_MENU:        MenuHandler(),
-            NODE_INPUT:       InputHandler(),
             NODE_CONFIRM:     ConfirmHandler(),
             NODE_ACTION:      ActionHandler(),
             NODE_ROUTER:      RouterHandler(),
             NODE_LIST:        ListHandler(),
-            NODE_MULTI_INPUT: MultiInputHandler(),
+            NODE_INPUT:       InputHandler(),
             NODE_MEDIA:       MediaHandler(),
         }
 

@@ -207,12 +207,24 @@ class BotEngine:
 
         # Go back
         if text in self.back_keywords:
+            # ── input-aware back: step within the input node first ────
+            node = self.tree.get(session.current_node)
+            if node and node.get("type") == "input":
+                from .handlers.input import _IDX_KEY_TMPL
+                idx_key = _IDX_KEY_TMPL.format(node=session.current_node)
+                idx     = session.pagination.get(idx_key, 0)
+                if idx > 0:
+                    # Clear the previously collected value for that field
+                    fields     = node.get("fields", [])
+                    prev_field = fields[idx - 1]
+                    session.collected.pop(prev_field.get("name", ""), None)
+                    session.pagination[idx_key] = idx - 1
+                    return None  # engine will call _render_current → re-renders the stepped-back field
+                # idx == 0: fall through to normal node-level back below
+            # ── normal node-level back ────────────────────────────────
             previous = session.go_back()
             if previous:
                 session.current_node = previous
-            else:
-                # Already at root – stay where you are
-                pass
             return None
 
         return None

@@ -88,13 +88,32 @@ class InputHandler(NodeHandler):
         current_field = fields[idx]
         field_type    = current_field.get("field_type", "text")
 
-        # ── first entry or re-entry (no meaningful input yet) ───────
-        # Always reset to the beginning so returning to an Input node mid-flow
-        # never resumes at a stale field index with incomplete collected data.
+        # ── first entry (no meaningful input yet) ───────────────────
+        # Reset only on a genuine cold entry (no idx tracked yet).
+        # When the engine's back-nav has already decremented the idx,
+        # we must NOT reset — we want to re-render that specific field.
         if _is_blank(message):
-            self._reset_input(session, node, fields)
-            idx = 0
+            if idx_key not in session.pagination:
+                self._reset_input(session, node, fields)
+                idx = 0
+            # else: idx already set by back-nav — render as-is
             return self._render_field(node, session, fields, idx)
+
+        # ── guard: never store navigation keywords as field values ───
+        # This catches cases where the engine's global-command interception
+        # is bypassed (e.g. duplicate webhook delivery, direct handler call).
+        # Only applies to plain-text messages; interactive replies are safe.
+        if message.type == "text" and message.text:
+            cmd = message.text.strip().lower()
+            _BACK  = {"0", "back", "go back"}
+            _HOME  = {"00", "home", "menu", "start over"}
+            _EXIT  = {"000", "exit", "quit", "reset", "goodbye", "bye"}
+            if cmd in _BACK or cmd in _HOME or cmd in _EXIT:
+                # Let the engine handle it on the next tick by returning
+                # a re-render of the current field unchanged.
+                # (The engine has already updated the session state before
+                #  reaching here, so we just need to not corrupt collected.)
+                return self._render_field(node, session, fields, idx)
 
         # ── try to accept the incoming message for this field ─────────
         value, error = self._accept(current_field, field_type, message, session, idx)

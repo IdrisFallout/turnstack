@@ -172,22 +172,29 @@ class NodeHandler(ABC):
         """
         Render the current field inside an input node.
 
-        This is only called by ``_render()`` / ``_enter_node()`` on a cold entry
-        (e.g. after a back-navigation returns to an input node mid-flow).
-        The InputHandler's own ``_render_field`` is used during active collection.
+        Two cases:
+        - Cold entry (no idx in pagination): reset the node and render field 0.
+        - Back-nav within the node (idx already set by engine): skip reset,
+          render whichever field the engine stepped back to.
         """
-        from .input import InputHandler
-        fields  = node.get("fields", [])
+        from .input import InputHandler, _IDX_KEY_TMPL
+        fields = node.get("fields", [])
 
         if not fields:
             return self._error(session, "Input: no fields defined.")
 
-        # Always reset on cold entry so re-entering an Input node never
-        # resumes at a stale index from a previous abandoned visit.
         handler = InputHandler()
-        handler._reset_input(session, node, fields)
+        idx_key = _IDX_KEY_TMPL.format(node=session.current_node)
 
-        return handler._render_field(node, session, fields, 0)
+        if idx_key in session.pagination:
+            # Back-nav has already positioned the index — just re-render that field.
+            idx = session.pagination[idx_key]
+        else:
+            # Genuine cold entry — start clean from field 0.
+            handler._reset_input(session, node, fields)
+            idx = 0
+
+        return handler._render_field(node, session, fields, idx)
 
     def _render_list(self, node: Dict[str, Any], session: Session) -> Reply:
         from .list_handler import ListHandler, MAX_ROWS

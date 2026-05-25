@@ -38,9 +38,16 @@ class MenuHandler(NodeHandler):
         all_options = node.get("options", [])
 
         # ── pagination state ─────────────────────────────────────────
+        # Use conservative capacity (MAX_MENU_ROWS - 2) so total_pages is
+        # stable. Exception: all options fit on one page with no nav rows.
+        if len(all_options) <= MAX_MENU_ROWS:
+            items_per_page = MAX_MENU_ROWS
+        else:
+            items_per_page = MAX_MENU_ROWS - 2  # always room for Prev + Next
+
         pkey = f"menu_{session.current_node}_page"
         page = session.pagination.get(pkey, 0)
-        total_pages = max(1, (len(all_options) + MAX_MENU_ROWS - 1) // MAX_MENU_ROWS)
+        total_pages = max(1, (len(all_options) + items_per_page - 1) // items_per_page)
         if page >= total_pages:
             page = total_pages - 1 if total_pages > 0 else 0
             session.pagination[pkey] = page
@@ -60,8 +67,8 @@ class MenuHandler(NodeHandler):
             return await self._enter_node(session, tree)
 
         # ── match option on current page ──────────────────────────────
-        start = page * MAX_MENU_ROWS
-        page_options = all_options[start: start + MAX_MENU_ROWS]
+        start = page * items_per_page
+        page_options = all_options[start: start + items_per_page]
         matched_next = self._match_option(page_options, message, raw_input, node.get("allow_numeric", False))
 
         if not matched_next:
@@ -122,38 +129,48 @@ class MenuHandler(NodeHandler):
         page: int,
         total_pages: int,
     ) -> Reply:
-        start = page * MAX_MENU_ROWS
-        page_options = all_options[start: start + MAX_MENU_ROWS]
-        text = node.get("text", "")
+        text         = node.get("text", "")
         button_label = node.get("button_label", "Options")
+
+        # Reserve slots for pagination rows so total rows never exceed MAX_MENU_ROWS.
+        # On a middle page we need both Prev and Next (2 slots).
+        # On the first or last page we need one (1 slot).
+        # On a single page we need none.
+        if total_pages == 1:
+            pagination_slots = 0
+        elif 0 < page < total_pages - 1:
+            pagination_slots = 2   # Prev + Next
+        else:
+            pagination_slots = 1   # Prev or Next only
+
+        max_items    = MAX_MENU_ROWS - pagination_slots
+        start        = page * (MAX_MENU_ROWS - 2) if total_pages > 1 else 0
+        page_options = all_options[start: start + max_items]
 
         # Build the reply options for the current page
         reply_options = []
         for opt in page_options:
             label = opt.get("label", "") if isinstance(opt, dict) else opt[0]
             value = opt.get("value", opt.get("next", "")) if isinstance(opt, dict) else opt[1]
-            desc = opt.get("description", "") if isinstance(opt, dict) else ""
+            desc  = opt.get("description", "") if isinstance(opt, dict) else ""
             reply_options.append(ReplyOption(label=label, value=value, description=desc))
 
-        # Add pagination options if needed
+        # Add pagination rows if needed
         if total_pages > 1:
             if page > 0:
                 reply_options.append(ReplyOption(
                     label="◀ Previous Page",
                     value=PREV_PAGE,
-                    description=f"Page {page}/{total_pages}"
+                    description=f"Page {page}/{total_pages}",
                 ))
             if page < total_pages - 1:
                 reply_options.append(ReplyOption(
                     label="Next Page ▶",
                     value=NEXT_PAGE,
-                    description=f"Page {page+2}/{total_pages}"
+                    description=f"Page {page + 2}/{total_pages}",
                 ))
 
-        # Optionally show page info in body
         body = text
-        if total_pages > 1:
-            body = f"{text}\n\n(Page {page+1} of {total_pages})"
 
         return Reply(
             type="text",

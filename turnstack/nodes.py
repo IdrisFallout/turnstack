@@ -8,29 +8,29 @@ but developers get full IDE autocomplete, type checking, and clear docstrings.
 
 Usage::
 
-    from turnstack.nodes import Menu, Input, Action, Confirm, Router, List, Option, Field, Route
+    from turnstack.nodes import (
+        Menu, Input, Action, Confirm, Router, ListNode, MediaReply,
+        Option, Field, MenuField, ButtonsField, ImageField, DocumentField, LocationField,
+        Route,
+    )
 
-    tree.add("welcome", Menu(
-        text="Welcome! What would you like to do?",
-        options=[
-            Option("Register as Landlord", next="register_start"),
-            Option("Learn More",           next="learn_more"),
-        ]
-    ))
-
-    tree.add("register_start", Input(
-        prompt="What is your first name?",
-        field="first_name",
-        next="register_last_name",
-        validate=validators.name,
-    ))
-
-    tree.add("entry", Router(
-        routes=[
-            Route(when=lambda s: s.context.get("user") is not None, next="home"),
-            Route(when=lambda s: s.context.get("invitation"),  next="onboarding"),
+    tree.add("register", Input(
+        title="Registration",
+        fields=[
+            Field("name", "What is your name?"),
+            MenuField("category", "Pick a category:", options=[
+                Option("Housing", next="housing"),
+                Option("Transport", next="transport"),
+            ]),
+            ButtonsField("role", "Are you a landlord or tenant?", options=[
+                Option("Landlord", next="landlord"),
+                Option("Tenant", next="tenant"),
+            ]),
+            ImageField("photo", "Please send your profile photo 📸"),
+            DocumentField("id_doc", "Upload your ID document 📄"),
+            LocationField("home_loc", "Share your home location 📍"),
         ],
-        default="public_welcome",
+        next="confirm_node",
     ))
 """
 
@@ -51,22 +51,25 @@ def _to_dict(node: "BaseNode") -> NodeDict:
     return node  # already a dict (legacy support)
 
 
-# ── option / field / route helpers ───────────────────────────────────────────
+# ── option / route helpers ────────────────────────────────────────────────────
 
 @dataclass
 class Option:
     """
-    A single choice in a Menu or Confirm node.
+    A single choice in a Menu, Confirm, MenuField, or ButtonsField.
 
     Args:
         label:       Text shown to the user (truncated to 24 chars on WhatsApp buttons).
         next:        Node key to navigate to when this option is selected.
+                     Inside a MenuField / ButtonsField this is used only when the
+                     field is the *last* field — normally the Input node advances to
+                     its own ``next`` after all fields are collected.
         description: Optional subtitle shown in list-style interactive menus (max 72 chars).
-        value:       Optional machine-readable value stored in session.context["last_option"].
-                     Defaults to the `next` key if not set.
+        value:       Machine-readable value stored in session.collected for this field.
+                     Defaults to the ``next`` key if not set.
     """
     label: str
-    next: str
+    next: str = ""
     description: str = ""
     value: Optional[str] = None
 
@@ -74,33 +77,7 @@ class Option:
         d: Dict[str, Any] = {"label": self.label, "next": self.next}
         if self.description:
             d["description"] = self.description
-        d["value"] = self.value if self.value is not None else self.next
-        return d
-
-
-@dataclass
-class Field:
-    """
-    A single input field inside a Input node.
-
-    Args:
-        name:      Key under which the collected value is stored in session.collected.
-        prompt:    Question shown to the user for this field.
-        validate:  Optional callable ``(value: str) -> Optional[str]``.
-                   Return an error string to reject, or None to accept.
-        transform: Optional callable ``(value: str) -> Any`` applied before storing.
-    """
-    name: str
-    prompt: str
-    validate: Optional[Callable[[str], Optional[str]]] = None
-    transform: Optional[Callable[[str], Any]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"name": self.name, "prompt": self.prompt}
-        if self.validate:
-            d["validate"] = self.validate
-        if self.transform:
-            d["transform"] = self.transform
+        d["value"] = self.value if self.value is not None else (self.next or self.label)
         return d
 
 
@@ -130,7 +107,254 @@ class BaseNode:
         raise NotImplementedError
 
 
-# ── node classes ──────────────────────────────────────────────────────────────
+# ── field base ────────────────────────────────────────────────────────────────
+
+@dataclass
+class BaseField:
+    """
+    Base class for all field types used inside an Input node.
+
+    All fields share ``name``, ``validate``, and ``transform``.
+    Subclasses add their type-specific rendering config.
+
+    The ``field_type`` class variable is the string tag the InputHandler
+    switches on — it must match one of the cases in ``InputHandler._render_field``.
+
+    Note: subclasses that add positional args (e.g. ``prompt``) declare them
+    directly so the dataclass field order stays intuitive for callers.
+    """
+    name: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {
+            "field_type": getattr(self, "field_type", "text"),
+            "name": self.name,
+        }
+        validate  = getattr(self, "validate", None)
+        transform = getattr(self, "transform", None)
+        if validate:
+            d["validate"] = validate
+        if transform:
+            d["transform"] = transform
+        return d
+
+
+# ── concrete field types ──────────────────────────────────────────────────────
+
+@dataclass
+class Field(BaseField):
+    """
+    A plain text input field.
+
+    The engine sends a text prompt and accepts any text reply.
+
+    Args:
+        name:      Key under which the collected value is stored in session.collected.
+        prompt:    Question shown to the user for this field.
+        validate:  Optional callable ``(value: str) -> Optional[str]``.
+                   Return an error string to reject input, or None to accept.
+        transform: Optional callable ``(value: str) -> Any`` applied before storing.
+    """
+    prompt: str = ""
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="text", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        return d
+
+
+# Alias so existing code using Field(name, prompt, ...) keeps working
+TextField = Field
+
+
+@dataclass
+class MenuField(BaseField):
+    """
+    A list-style interactive selection field inside an Input node.
+
+    Renders as a WhatsApp interactive list message. The user picks one
+    option; its ``value`` (or ``label`` as fallback) is stored in
+    session.collected under ``name``.
+
+    Args:
+        name:         Key under which the selected value is stored.
+        prompt:       Question / body text shown above the list.
+        options:      List of :class:`Option` objects.
+        button_label: Custom label for the interactive list open button.
+                      Default: "Options".
+        header:       Optional header line.
+        footer:       Optional footer line.
+        allow_numeric: Also accept "1", "2" … digit input as fallback.
+    """
+    prompt: str = ""
+    options: List[Option] = field(default_factory=list)
+    button_label: str = "Options"
+    header: str = ""
+    footer: str = ""
+    allow_numeric: bool = False
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="menu", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        d["options"] = [o.to_dict() for o in self.options]
+        d["button_label"] = self.button_label
+        d["header"] = self.header
+        d["footer"] = self.footer
+        d["allow_numeric"] = self.allow_numeric
+        return d
+
+
+@dataclass
+class ButtonsField(BaseField):
+    """
+    An interactive button selection field inside an Input node.
+
+    Renders as WhatsApp reply buttons (max 3 buttons). The user taps one;
+    its ``value`` is stored in session.collected under ``name``.
+
+    Args:
+        name:         Key under which the selected value is stored.
+        prompt:       Question / body text shown with the buttons.
+        options:      List of :class:`Option` objects (max 3).
+        allow_numeric: Also accept "1" / "2" / "3" digit input as fallback.
+    """
+    prompt: str = ""
+    options: List[Option] = field(default_factory=list)
+    allow_numeric: bool = False
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="buttons", init=False, repr=False)
+
+    def __post_init__(self):
+        if len(self.options) > 3:
+            raise ValueError(
+                f"ButtonsField '{self.name}' has {len(self.options)} options — "
+                "WhatsApp interactive buttons support at most 3."
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        d["options"] = [o.to_dict() for o in self.options]
+        d["allow_numeric"] = self.allow_numeric
+        return d
+
+
+@dataclass
+class ImageField(BaseField):
+    """
+    A media input field that waits for the user to send an image.
+
+    The engine rejects any non-image message with ``rejection_text`` until
+    a valid image is received. The collected value is a dict::
+
+        {
+            "media_id":   str,   # WhatsApp media ID
+            "mime_type":  str,   # e.g. "image/jpeg"
+        }
+
+    Args:
+        name:           Key under which the collected dict is stored.
+        prompt:         Message asking the user to send their image.
+        rejection_text: Message shown when the user sends the wrong type.
+    """
+    prompt: str = ""
+    rejection_text: str = "⚠️ Please send an image (photo)."
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="image", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        d["rejection_text"] = self.rejection_text
+        return d
+
+
+@dataclass
+class DocumentField(BaseField):
+    """
+    A media input field that waits for the user to send a document.
+
+    The engine rejects any non-document message with ``rejection_text`` until
+    a valid document is received. Optionally filter by ``accept`` MIME types.
+
+    The collected value is a dict::
+
+        {
+            "media_id":   str,   # WhatsApp media ID
+            "mime_type":  str,   # e.g. "application/pdf"
+            "filename":   str,   # original filename (may be empty)
+        }
+
+    Args:
+        name:           Key under which the collected dict is stored.
+        prompt:         Message asking the user to send their document.
+        accept:         Optional list of accepted MIME types,
+                        e.g. ``["application/pdf", "image/jpeg"]``.
+                        If empty, any document is accepted.
+        rejection_text: Message shown when the user sends the wrong type.
+    """
+    prompt: str = ""
+    accept: List[str] = field(default_factory=list)
+    rejection_text: str = "⚠️ Please send a document file."
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="document", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        d["accept"] = list(self.accept)
+        d["rejection_text"] = self.rejection_text
+        return d
+
+
+@dataclass
+class LocationField(BaseField):
+    """
+    A location input field that sends a location-request message and waits
+    for the user to share their location.
+
+    The engine rejects any non-location message with ``rejection_text``.
+
+    The collected value is a dict::
+
+        {
+            "latitude":  float,
+            "longitude": float,
+            "name":      str | None,
+            "address":   str | None,
+        }
+
+    Args:
+        name:               Key under which the collected dict is stored.
+        prompt:             Text shown alongside the "Send Location" button.
+                            On WhatsApp, this becomes the body of a
+                            ``interactive.type = "location_request_message"``.
+        rejection_text:     Message shown when the user sends something other
+                            than a location.
+    """
+    prompt: str = "Please share your location 📍"
+    rejection_text: str = "⚠️ Please use the 📍 button to share your location."
+    validate: Optional[Callable[[Any], Optional[str]]] = None
+    transform: Optional[Callable[[Any], Any]] = None
+    field_type: str = field(default="location", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["prompt"] = self.prompt
+        d["rejection_text"] = self.rejection_text
+        return d
+
+
+# ── top-level node classes ────────────────────────────────────────────────────
 
 @dataclass
 class Menu(BaseNode):
@@ -138,18 +362,14 @@ class Menu(BaseNode):
     Show the user a numbered list of options.
 
     The engine renders this as a WhatsApp interactive list message.
-    Developers should prefer interactive messages over numbered text where possible.
 
     Args:
         text:          Message body shown above the options.
         options:       List of :class:`Option` objects.
         allow_numeric: If True, also accept plain digit input ("1", "2" …).
-                       Useful for fallback SMS / terminal testing.
-                       Default: False (interactive-only).
         header:        Optional header line shown in the interactive list.
         footer:        Optional footer line shown in the interactive list.
-        button_label:  Custom label for the interactive list button
-                       (e.g., "Choose Action"). Default: "Options".
+        button_label:  Custom label for the interactive list button. Default: "Options".
     """
     text: str
     options: List[Option]
@@ -175,26 +395,38 @@ class Input(BaseNode):
     """
     Collect several fields in sequence, owned by a single logical form node.
 
-    The engine walks through ``fields`` one at a time, storing each value in
-    ``session.collected``, then advances to ``next`` when all fields are filled.
+    Each field can be a different type — text, interactive list, buttons,
+    image, document, or location. The engine walks through ``fields`` one at a
+    time, sends the appropriate prompt, validates the response, stores the value
+    in ``session.collected``, then advances to ``next`` when all fields are done.
 
-    This is cleaner than chaining many :class:`Input` nodes for long forms.
+    Supported field types:
+    - :class:`Field` / :class:`TextField`  — plain text answer
+    - :class:`MenuField`                   — interactive list selection
+    - :class:`ButtonsField`                — interactive button selection (≤3)
+    - :class:`ImageField`                  — waits for an image
+    - :class:`DocumentField`               — waits for a document
+    - :class:`LocationField`               — waits for a shared location
 
     Args:
-        fields: Ordered list of :class:`Field` objects.
+        fields: Ordered list of field objects (any mix of types above).
         next:   Node key to navigate to after all fields are collected.
-        intro:  Optional message shown once when the user first enters this node.
+        title:  Optional flow title shown on every step as "Title - Step N of M".
+                If omitted, only the bare "(N/M)" counter is shown.
+        intro:  Deprecated alias for ``title``. If both are set, ``title`` wins.
     """
-    fields: List[Field]
+    fields: List[BaseField]
     next: str
-    intro: str = ""
+    title: str = ""
+    intro: str = ""   # kept for backward compatibility — maps to title if title is blank
 
     def to_dict(self) -> NodeDict:
+        effective_title = self.title or self.intro   # title wins; fall back to intro
         return {
             "type": "input",
             "fields": [f.to_dict() for f in self.fields],
             "next": self.next,
-            "intro": self.intro,
+            "title": effective_title,
         }
 
 
@@ -205,10 +437,8 @@ class Confirm(BaseNode):
 
     Args:
         text:    Summary text. Can be a plain string or a callable
-                 ``(collected: dict) -> str`` that receives the current
-                 ``session.collected`` so you can interpolate collected values.
-        options: List of :class:`Option` objects (typically Yes / Edit / Cancel).
-                 Rendered as WhatsApp reply buttons (**max 3**).
+                 ``(collected: dict) -> str``.
+        options: List of :class:`Option` objects (max 3, WhatsApp button limit).
         allow_numeric: Also accept digit input. Default: False.
     """
     text: Union[str, Callable[[Dict[str, Any]], str]]
@@ -233,12 +463,7 @@ class Confirm(BaseNode):
 @dataclass
 class Action(BaseNode):
     """
-    Execute a side-effect function (save to DB, send notification, etc.)
-    and advance to the next node.
-
-    The function receives ``(session, collected)`` and must return a string
-    that is sent to the user, OR a :class:`~turnstack.reply.Reply` object
-    for full control (e.g. to send a media file).
+    Execute a side-effect function and advance to the next node.
 
     Args:
         fn:   Callable ``(session: Session, collected: dict) -> str | Reply``.
@@ -257,17 +482,10 @@ class Router(BaseNode):
     """
     Silently branch to different nodes based on session state — no user input required.
 
-    The engine evaluates ``routes`` in order and follows the first truthy condition.
-    Falls back to ``default`` if no condition matches.
-
-    This is the entry-point node type: one phone number arriving → check DB →
-    route to landlord home, tenant home, invited-user onboarding, or public welcome.
-
     Args:
         routes:  Ordered list of :class:`Route` objects.
         default: Node key used when no route condition matches.
-        before:  Optional callable ``(session) -> None`` run before evaluation
-                 (useful for loading user data into ``session.context``, e.g. ``session.context["user"]``).
+        before:  Optional callable ``(session) -> None`` run before evaluation.
     """
     routes: List[Route]
     default: str
@@ -285,37 +503,22 @@ class Router(BaseNode):
 @dataclass
 class ListNode(BaseNode):
     """
-    Render a dynamic list of items fetched at runtime (from DB, API, etc.)
-    with automatic pagination.
-
-    Two modes:
-    - Simple: `fetch(session)` returns a full list of all items.
-    - Paginated: `fetch(session, page, page_size)` returns either:
-        * a tuple (items_for_page, total_count)
-        * a dict {"items": [...], "total": N}
-      In this mode, the engine will not fetch all items, only the current page.
-
-    When ``interactive=True``, the list is sent as a WhatsApp interactive
-    list message. Pagination buttons appear automatically and consume only
-    as many rows as needed (1 for first/last page, 2 for middle pages).
-    Extra options are shown **only on the last page** if space permits.
+    Render a dynamic list of items fetched at runtime with automatic pagination.
 
     Args:
-        fetch:           Callable. In simple mode: ``(session) -> list``.
-                         In paginated mode: ``(session, page, page_size) -> (list, int) | dict``.
-        item_label:      Callable ``(item: Any) -> str`` for display label.
-        on_select:       Node to go to when an item is selected.
-        title:           Heading shown above the list (no automatic page number).
-        empty_text:      Text shown when the list is empty.
+        fetch:            Callable. Simple: ``(session) -> list``.
+                          Paginated: ``(session, page, page_size) -> (list, int) | dict``.
+        item_label:       Callable ``(item: Any) -> str`` for display label.
+        on_select:        Node to go to when an item is selected.
+        title:            Heading shown above the list.
+        empty_text:       Text shown when the list is empty.
         item_description: Optional subtitle callable.
-        extra_options:   Static :class:`Option` list (max 3). Shown only on the last page.
-        interactive:     If True, render as interactive list; else plain text.
-        button_label:    Custom label for the interactive list button.
-        page_size:       Number of items per page (default: 8, but may be adjusted
-                         to fit WhatsApp limit). If paginated fetch is used, this is
-                         passed to the fetch function.
+        extra_options:    Static :class:`Option` list (max 3, last page only).
+        interactive:      If True, render as interactive list.
+        button_label:     Custom label for the interactive list button.
+        page_size:        Items per page (default 8, clamped to 1–10).
     """
-    fetch: Callable[..., Any]  # signature depends on mode
+    fetch: Callable[..., Any]
     item_label: Callable[[Any], str]
     on_select: str
     title: str = "Select an option"
@@ -324,18 +527,14 @@ class ListNode(BaseNode):
     extra_options: List[Option] = field(default_factory=list)
     interactive: bool = False
     button_label: str = "Options"
-    page_size: int = 8  # default, but will be clamped
+    page_size: int = 8
 
     def __post_init__(self):
         if self.interactive and len(self.extra_options) > 3:
             raise ValueError(
                 f"ListNode interactive mode supports at most 3 extra_options, got {len(self.extra_options)}."
             )
-        # Page size cannot exceed 10 (WhatsApp limit) and cannot be < 1
-        if self.page_size < 1:
-            self.page_size = 1
-        if self.page_size > 10:
-            self.page_size = 10
+        self.page_size = max(1, min(10, self.page_size))
 
     def to_dict(self) -> NodeDict:
         return {
@@ -358,21 +557,11 @@ class MediaReply(BaseNode):
     """
     Send a file (PDF, CSV, image, etc.) to the user, then continue the flow.
 
-    The engine calls ``generate(session, collected)`` to get the file bytes,
-    sets ``Reply.type = "media"``, and then advances to ``next``.
-
-    The developer's WhatsApp adapter is responsible for actually sending the file
-    using their provider's media API.
-
     Args:
         generate:  Callable ``(session, collected) -> bytes``.
-                   Must return the raw file bytes.
-        filename:  Default filename sent with the file (e.g. ``"report_june.pdf"``).
-                   Can be a callable ``(session, collected) -> str`` for dynamic names.
-        mime_type: MIME type string, e.g. ``"application/pdf"``, ``"text/csv"``,
-                   ``"image/png"``.
-        caption:   Optional text message sent alongside the file.
-                   Can be a callable ``(session, collected) -> str``.
+        filename:  Filename or callable ``(session, collected) -> str``.
+        mime_type: MIME type string, e.g. ``"application/pdf"``.
+        caption:   Optional caption text or callable ``(session, collected) -> str``.
         next:      Node key to navigate to after sending the file.
     """
     generate: Callable[..., bytes]
@@ -392,19 +581,30 @@ class MediaReply(BaseNode):
         }
 
 
-# ── convenience re-exports so developers only need one import ─────────────────
+# ── convenience re-exports ────────────────────────────────────────────────────
 
 __all__ = [
+    # option / route helpers
     "Option",
-    "Field",
     "Route",
+    # field types
+    "BaseField",
+    "Field",
+    "TextField",       # alias for Field
+    "MenuField",
+    "ButtonsField",
+    "ImageField",
+    "DocumentField",
+    "LocationField",
+    # node types
+    "BaseNode",
     "Menu",
-    "Input",
     "Input",
     "Confirm",
     "Action",
     "Router",
     "ListNode",
     "MediaReply",
+    # type alias
     "NodeDict",
 ]

@@ -130,7 +130,7 @@ class BaseField:
     This lets you conditionally show follow-up fields based on earlier answers.
     """
     name: str
-    skip_if: Optional[Callable[..., bool]] = field(default=None, init=True, repr=False)
+    skip_if: Optional[Callable[..., bool]] = field(default=None, init=True, repr=False, kw_only=True)
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -144,7 +144,12 @@ class BaseField:
             d["validate"] = validate
         if transform:
             d["transform"] = transform
-        if skip_if:
+        if skip_if is not None:
+            if not callable(skip_if):
+                raise TypeError(
+                    f"Field '{self.name}': skip_if must be a callable "
+                    f"(e.g. lambda session: ...), got {type(skip_if).__name__!r}."
+                )
             d["skip_if"] = skip_if
         return d
 

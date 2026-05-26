@@ -54,6 +54,19 @@ _MENU_PREV      = "__mf_prev__"
 _MENU_NEXT      = "__mf_next__"
 
 
+def _skip_if(field_dict: dict, session) -> bool:
+    """
+    Safely evaluate a field's ``skip_if`` predicate.
+
+    Returns ``True`` only when ``skip_if`` is a callable that returns truthy.
+    A missing, ``None``, or non-callable value (e.g. an accidentally-passed
+    string) always returns ``False`` so the field is shown rather than
+    silently dropped.
+    """
+    predicate = field_dict.get("skip_if")
+    return callable(predicate) and bool(predicate(session))
+
+
 class InputHandler(NodeHandler):
     """
     Handles ``input`` nodes.
@@ -98,8 +111,7 @@ class InputHandler(NodeHandler):
                 idx = 0
                 # Advance past any leading skip_if fields on fresh entry
                 while idx < len(fields):
-                    skip_if = fields[idx].get("skip_if")
-                    if skip_if and skip_if(session):
+                    if _skip_if(fields[idx], session):
                         session.collected[fields[idx]["name"]] = None
                         idx += 1
                         session.pagination[idx_key] = idx
@@ -155,8 +167,7 @@ class InputHandler(NodeHandler):
         # Evaluate skip_if on every subsequent field in order; for each
         # skipped field store None so downstream code can still key on it.
         while idx < len(fields):
-            skip_if = fields[idx].get("skip_if")
-            if skip_if and skip_if(session):
+            if _skip_if(fields[idx], session):
                 session.collected[fields[idx]["name"]] = None
                 idx += 1
                 session.pagination[idx_key] = idx
@@ -388,13 +399,12 @@ class InputHandler(NodeHandler):
         # Only count fields that are actually visible (no skip_if, or skip_if=False)
         visible_total = sum(
             1 for fi in fields
-            if not (fi.get("skip_if") and fi["skip_if"](session))  # type: ignore[operator]
-            if True  # keep the generator tidy
+            if not _skip_if(fi, session)
         )
         # Visible position of current field (1-based)
         visible_idx = sum(
             1 for fi in fields[:idx]
-            if not (fi.get("skip_if") and fi["skip_if"](session))
+            if not _skip_if(fi, session)
         ) + 1
         total      = visible_total
 
@@ -574,8 +584,7 @@ def _skip_backwards(fields: list, idx: int, session) -> int:
     This ensures the user never lands on a conditional field they never saw.
     """
     while idx > 0:
-        skip_if = fields[idx].get("skip_if")
-        if skip_if and skip_if(session):
+        if _skip_if(fields[idx], session):
             idx -= 1
         else:
             break

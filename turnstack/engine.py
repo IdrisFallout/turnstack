@@ -62,6 +62,7 @@ class BotEngine:
         back_keywords: Optional[Set[str]] = None,
         home_keywords: Optional[Set[str]] = None,
         exit_keywords: Optional[Set[str]] = None,
+        unsupported_text: Optional[str] = None,
     ):
         self.tree = tree
         self.session_store = session_store or InMemorySessionStore(session_timeout=session_timeout)
@@ -71,6 +72,15 @@ class BotEngine:
         self.back_keywords = back_keywords or {"0", "back", "go back"}
         self.home_keywords = home_keywords or {"00", "home", "menu", "start over"}
         self.exit_keywords = exit_keywords or {"000", "exit", "quit", "reset", "goodbye", "bye"}
+
+        # Message shown when an unsupported type (sticker, audio, reaction…) arrives
+        self.unsupported_text = (
+            unsupported_text
+            or "⚠️ Sorry, I can't process the message. Please retry."
+        )
+
+        # Types the engine knows how to route; everything else gets unsupported_text
+        self._supported_types = {"text", "interactive", "image", "document", "location"}
 
         # validate tree on startup — fail loud, not silent
         self.tree.validate()
@@ -130,7 +140,24 @@ class BotEngine:
         # ── 3. touch (activate if new) ────────────────────────────────
         session.touch()
 
-        # ── 4. new session first message — always render entry node ───
+        # ── 4. unsupported message type → polite reply, no state change ──
+        if incoming.type not in self._supported_types:
+            reply = await self._render_current(session)
+            if reply is None:
+                reply = Reply(
+                    type="text",
+                    body=self.unsupported_text,
+                    phone=incoming.user_id,
+                )
+            else:
+                reply.body = self.unsupported_text + "\n\n" + reply.body
+            reply = self._enrich_menu_reply(reply, session)
+            reply.session_state = session.lifecycle_state
+            reply.current_node = session.current_node
+            await self.session_store.save(session)
+            return reply
+
+        # ── 5. new session first message — always render entry node ───
         if session.lifecycle_state == "new" or _is_blank(incoming):
             session.touch()
             reply = await self._render_current(session)
@@ -144,7 +171,7 @@ class BotEngine:
             await self.session_store.save(session)
             return reply
 
-        # ── 5. INTERCEPT GLOBAL COMMANDS (before dispatch) ────────────
+        # ── 6. INTERCEPT GLOBAL COMMANDS (before dispatch) ────────────
         # Only plain text messages (not interactive selections) can be commands
         if incoming.type == "text" and incoming.text:
             cmd_reply = await self._handle_global_command(session, incoming.text.strip().lower())
@@ -163,7 +190,7 @@ class BotEngine:
                 await self.session_store.save(session)
                 return reply
 
-        # ── 6. normal dispatch ────────────────────────────────────────
+        # ── 7. normal dispatch ────────────────────────────────────────
         reply = await self._dispatch(session, incoming)
         if reply is None:
             reply = Reply(
@@ -174,7 +201,7 @@ class BotEngine:
             )
         reply = self._enrich_menu_reply(reply, session)
 
-        # ── 7. attach meta and save ───────────────────────────────────
+        # ── 8. attach meta and save ───────────────────────────────────
         reply.session_state = session.lifecycle_state
         reply.current_node  = session.current_node
         await self.session_store.save(session)
@@ -267,9 +294,8 @@ class BotEngine:
             )
 
         # renderable nodes
-        from .handlers.base import NodeHandler as _Base
-        dummy = _Base.__new__(_Base)
-        return dummy._render(node, session)
+        handler = self._handlers.get(t) or next(iter(self._handlers.values()))
+        return handler._render(node, session)
 
     def _enrich_menu_reply(self, reply: Reply, session: Session) -> Reply:
         """

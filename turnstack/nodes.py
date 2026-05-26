@@ -122,8 +122,15 @@ class BaseField:
 
     Note: subclasses that add positional args (e.g. ``prompt``) declare them
     directly so the dataclass field order stays intuitive for callers.
+
+    ``skip_if`` — optional callable ``(session: Session) -> bool``.
+    When provided, the InputHandler evaluates it at runtime just before
+    presenting the field.  If it returns ``True`` the field is silently
+    skipped and ``None`` is stored under its name in ``session.collected``.
+    This lets you conditionally show follow-up fields based on earlier answers.
     """
     name: str
+    skip_if: Optional[Callable[..., bool]] = field(default=None, init=True, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -132,10 +139,13 @@ class BaseField:
         }
         validate  = getattr(self, "validate", None)
         transform = getattr(self, "transform", None)
+        skip_if   = getattr(self, "skip_if", None)
         if validate:
             d["validate"] = validate
         if transform:
             d["transform"] = transform
+        if skip_if:
+            d["skip_if"] = skip_if
         return d
 
 
@@ -190,7 +200,7 @@ class MenuField(BaseField):
         allow_numeric: Also accept "1", "2" … digit input as fallback.
     """
     prompt: str = ""
-    options: List[Option] = field(default_factory=list)
+    options: Union[List[Option], Callable[..., List[Option]]] = field(default_factory=list)
     button_label: str = "Options"
     header: str = ""
     footer: str = ""
@@ -202,7 +212,8 @@ class MenuField(BaseField):
     def to_dict(self) -> Dict[str, Any]:
         d = super().to_dict()
         d["prompt"] = self.prompt
-        d["options"] = [o.to_dict() for o in self.options]
+        # options may be a static list OR a callable resolved at render time
+        d["options"] = self.options   # kept as-is; InputHandler resolves callables
         d["button_label"] = self.button_label
         d["header"] = self.header
         d["footer"] = self.footer

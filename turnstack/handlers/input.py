@@ -96,7 +96,21 @@ class InputHandler(NodeHandler):
             if idx_key not in session.pagination:
                 self._reset_input(session, node, fields)
                 idx = 0
-            # else: idx already set by back-nav — render as-is
+                # Advance past any leading skip_if fields on fresh entry
+                while idx < len(fields):
+                    skip_if = fields[idx].get("skip_if")
+                    if skip_if and skip_if(session):
+                        session.collected[fields[idx]["name"]] = None
+                        idx += 1
+                        session.pagination[idx_key] = idx
+                    else:
+                        break
+            else:
+                # Back-nav: engine already decremented idx by 1.
+                # Walk backwards further past any skip_if fields that were
+                # never actually shown (auto-skipped).
+                idx = _skip_backwards(fields, idx, session)
+                session.pagination[idx_key] = idx
             return self._render_field(node, session, fields, idx)
 
         # ── guard: never store navigation keywords as field values ───
@@ -109,10 +123,10 @@ class InputHandler(NodeHandler):
             _HOME  = {"00", "home", "menu", "start over"}
             _EXIT  = {"000", "exit", "quit", "reset", "goodbye", "bye"}
             if cmd in _BACK or cmd in _HOME or cmd in _EXIT:
-                # Let the engine handle it on the next tick by returning
-                # a re-render of the current field unchanged.
-                # (The engine has already updated the session state before
-                #  reaching here, so we just need to not corrupt collected.)
+                # Engine already decremented idx before reaching here.
+                # Walk backwards past any skip_if fields never shown.
+                idx = _skip_backwards(fields, idx, session)
+                session.pagination[idx_key] = idx
                 return self._render_field(node, session, fields, idx)
 
         # ── try to accept the incoming message for this field ─────────
@@ -136,6 +150,18 @@ class InputHandler(NodeHandler):
         session.collected[current_field["name"]] = value
         idx += 1
         session.pagination[idx_key] = idx
+
+        # ── skip fields whose condition is met ────────────────────────
+        # Evaluate skip_if on every subsequent field in order; for each
+        # skipped field store None so downstream code can still key on it.
+        while idx < len(fields):
+            skip_if = fields[idx].get("skip_if")
+            if skip_if and skip_if(session):
+                session.collected[fields[idx]["name"]] = None
+                idx += 1
+                session.pagination[idx_key] = idx
+            else:
+                break
 
         # ── advance to next field or finish ───────────────────────────
         if idx >= len(fields):
@@ -227,7 +253,7 @@ class InputHandler(NodeHandler):
     def _accept_menu(
         self, f: Dict[str, Any], message: IncomingMessage, session: Session, field_idx: int
     ) -> Tuple[Any, Optional[str]]:
-        options       = f.get("options", [])
+        options       = _resolve_options(f, session)
         allow_numeric = f.get("allow_numeric", False)
         pkey          = _MENU_PAGE_TMPL.format(node=session.current_node, field=field_idx)
         items_per_page = _MAX_MENU_ROWS - 2 if len(options) > _MAX_MENU_ROWS else _MAX_MENU_ROWS
@@ -269,7 +295,7 @@ class InputHandler(NodeHandler):
     def _accept_buttons(
         self, f: Dict[str, Any], message: IncomingMessage
     ) -> Tuple[Any, Optional[str]]:
-        options       = f.get("options", [])
+        options       = _resolve_options(f, None)
         allow_numeric = f.get("allow_numeric", False)
         raw           = (message.interactive_id or message.text or "").strip()
 
@@ -359,14 +385,25 @@ class InputHandler(NodeHandler):
         """Build the correct Reply for ``fields[idx]`` based on its type."""
         f          = fields[idx]
         field_type = f.get("field_type", "text")
-        total      = len(fields)
+        # Only count fields that are actually visible (no skip_if, or skip_if=False)
+        visible_total = sum(
+            1 for fi in fields
+            if not (fi.get("skip_if") and fi["skip_if"](session))  # type: ignore[operator]
+            if True  # keep the generator tidy
+        )
+        # Visible position of current field (1-based)
+        visible_idx = sum(
+            1 for fi in fields[:idx]
+            if not (fi.get("skip_if") and fi["skip_if"](session))
+        ) + 1
+        total      = visible_total
 
         # Header line — "Title - Step N of M" when title is set, else plain "(N/M)"
         def _prefixed(prompt: str) -> str:
             title = node.get("title", "") or node.get("intro", "")
             if total > 1:
-                step_label = f"Step {idx + 1} of {total}"
-                header = f"*{title} - {step_label}*" if title else f"({idx + 1}/{total})"
+                step_label = f"Step {visible_idx} of {total}"
+                header = f"*{title} - {step_label}*" if title else f"({visible_idx}/{total})"
             else:
                 header = f"*{title}*" if title else ""
             return f"{header}\n\n{prompt}" if header else prompt
@@ -420,7 +457,7 @@ class InputHandler(NodeHandler):
         body: str,
         field_idx: int = 0,
     ) -> Reply:
-        options        = f.get("options", [])
+        options        = _resolve_options(f, session)
         button_label   = f.get("button_label", "Options")
         items_per_page = _MAX_MENU_ROWS - 2 if len(options) > _MAX_MENU_ROWS else _MAX_MENU_ROWS
         pkey           = _MENU_PAGE_TMPL.format(node=session.current_node, field=field_idx)
@@ -475,7 +512,7 @@ class InputHandler(NodeHandler):
         session: Session,
         body: str,
     ) -> Reply:
-        options = f.get("options", [])
+        options = _resolve_options(f, session)
 
         reply_options = [
             ReplyOption(
@@ -504,3 +541,42 @@ def _is_blank(message: IncomingMessage) -> bool:
         and not message.media_id
         and not message.location
     )
+
+def _resolve_options(f: dict, session) -> list:
+    """
+    Return a plain list of option dicts for a menu/buttons field.
+
+    ``options`` may be stored as:
+    - a list of dicts (already serialised)          → returned as-is
+    - a callable ``(session) -> list[Option|dict]`` → called now, then serialised
+    """
+    try:
+        from ..nodes import Option  # noqa: F401 – used in isinstance check below
+        _Option = Option
+    except ImportError:
+        _Option = None
+
+    raw = f.get("options", [])
+    if callable(raw):
+        raw = raw(session)
+    result = []
+    for o in raw:
+        if _Option and isinstance(o, _Option):
+            result.append(o.to_dict())
+        else:
+            result.append(o)  # already a dict
+    return result
+
+def _skip_backwards(fields: list, idx: int, session) -> int:
+    """
+    After back-nav has decremented idx by 1, keep stepping back while the
+    field at the current idx was auto-skipped (skip_if returns True).
+    This ensures the user never lands on a conditional field they never saw.
+    """
+    while idx > 0:
+        skip_if = fields[idx].get("skip_if")
+        if skip_if and skip_if(session):
+            idx -= 1
+        else:
+            break
+    return idx

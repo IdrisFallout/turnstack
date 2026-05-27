@@ -177,7 +177,7 @@ class NodeHandler(ABC):
         - Back-nav within the node (idx already set by engine): skip reset,
           render whichever field the engine stepped back to.
         """
-        from .input import InputHandler, _IDX_KEY_TMPL
+        from .input import InputHandler, _IDX_KEY_TMPL, _flatten_fields
         fields = node.get("fields", [])
 
         if not fields:
@@ -187,11 +187,19 @@ class NodeHandler(ABC):
         idx_key = _IDX_KEY_TMPL.format(node=session.current_node)
 
         if idx_key in session.pagination:
-            # Back-nav has already positioned the index — just re-render that field.
-            idx = session.pagination[idx_key]
+            # Back-nav has already positioned the index -- just re-render that field.
+            # Flatten so BranchFields that are now active are included and the
+            # step counter reflects the real remaining work.
+            idx    = session.pagination[idx_key]
+            fields = _flatten_fields(fields, session)
         else:
-            # Genuine cold entry — start clean from field 0.
+            # Genuine cold entry -- reset first (wipes collected + pagination),
+            # then flatten against the now-clean session so branch conditions
+            # that depended on stale answers from a previous run evaluate to
+            # False. Without the re-flatten the BranchField object itself is
+            # counted as a field, giving "Step 1 of 8" instead of "Step 1 of 7".
             handler._reset_input(session, node, fields)
+            fields = _flatten_fields(fields, session)
             idx = 0
 
         return handler._render_field(node, session, fields, idx)

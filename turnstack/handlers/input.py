@@ -54,6 +54,46 @@ _MENU_PREV      = "__mf_prev__"
 _MENU_NEXT      = "__mf_next__"
 
 
+def _flatten_fields(raw_fields: list, session) -> list:
+    """
+    Recursively expand BranchField entries into a flat, concrete field list.
+
+    Handles both serialised dicts (field_type == "branch") and
+    BranchField objects directly, since Input.to_dict() serialises all
+    fields but developers may also pass objects that reach here unserialized.
+    """
+    result = []
+    for f in raw_fields:
+        # Support both dict and BranchField object
+        if isinstance(f, dict):
+            ftype = f.get("field_type")
+            when  = f.get("when")
+            children = f.get("fields", [])
+        else:
+            ftype    = getattr(f, "field_type", None)
+            when     = getattr(f, "when", None)
+            children = getattr(f, "fields", [])
+
+        if ftype == "branch":
+            try:
+                active = callable(when) and bool(when(session))
+            except Exception:
+                active = False
+            if active:
+                # Serialise children to dicts before recursing so the rest
+                # of the handler always works with plain dicts
+                children_dicts = [
+                    c.to_dict() if hasattr(c, "to_dict") else c
+                    for c in children
+                ]
+                result.extend(_flatten_fields(children_dicts, session))
+            # False branch → nothing added
+        else:
+            # Serialise to dict if it's still an object
+            result.append(f.to_dict() if hasattr(f, "to_dict") else f)
+    return result
+
+
 def _skip_if(field_dict: dict, session) -> bool:
     """
     Safely evaluate a field's ``skip_if`` predicate.
@@ -88,7 +128,13 @@ class InputHandler(NodeHandler):
         message: IncomingMessage,
         tree: "FlowTree",
     ) -> Reply:
-        fields  = node.get("fields", [])
+        # ── flatten BranchFields into a concrete list for this message ─
+        # This is the single source of truth for the active field sequence.
+        # idx stored in session.pagination always points into THIS list.
+        # Re-flattening every message is intentional: after the user answers
+        # a branching field, the next flatten reflects their answer and the
+        # correct branch fields appear at the right positions.
+        fields  = _flatten_fields(node.get("fields", []), session)
         idx_key = _IDX_KEY_TMPL.format(node=session.current_node)
         idx     = session.pagination.get(idx_key, 0)
 
@@ -108,6 +154,12 @@ class InputHandler(NodeHandler):
         if _is_blank(message):
             if idx_key not in session.pagination:
                 self._reset_input(session, node, fields)
+                # Re-flatten after reset: collected is now wiped, so any branch
+                # whose condition depended on a stale answer from a previous run
+                # will correctly evaluate to False.  Without this, a user who
+                # previously picked "__custom__" would see "Step 1 of 8" on their
+                # next fresh entry because the branch was still expanded.
+                fields = _flatten_fields(node.get("fields", []), session)
                 idx = 0
                 # Advance past any leading skip_if fields on fresh entry
                 while idx < len(fields):
@@ -163,9 +215,13 @@ class InputHandler(NodeHandler):
         idx += 1
         session.pagination[idx_key] = idx
 
+        # ── re-flatten AFTER storing so branch conditions see the new answer ──
+        # The answer just stored may control a BranchField condition. We must
+        # re-evaluate the full field list now so the correct branch fields
+        # are present (or absent) when we advance to the next idx.
+        fields = _flatten_fields(node.get("fields", []), session)
+
         # ── skip fields whose condition is met ────────────────────────
-        # Evaluate skip_if on every subsequent field in order; for each
-        # skipped field store None so downstream code can still key on it.
         while idx < len(fields):
             if _skip_if(fields[idx], session):
                 session.collected[fields[idx]["name"]] = None
@@ -193,21 +249,26 @@ class InputHandler(NodeHandler):
         """
         Wipe all state for this Input node so it starts clean.
 
-        Clears:
-        - The field index (``mi_{node}_idx``)
-        - Any per-field MenuField page state (``mi_{node}_f{i}_pg``)
-        - The collected values for every field defined on this node
-          (leaves unrelated keys in session.collected untouched)
+        ``fields`` is the already-flattened list for the *current* run.
+        We also walk the raw node fields recursively to clear any branch
+        children that were active on a *previous* run (handles the case
+        where the user restarts after having taken a different branch).
         """
         node_key = session.current_node
-        # Field index
         session.pagination.pop(_IDX_KEY_TMPL.format(node=node_key), None)
-        # Per-field menu page state
         for i in range(len(fields)):
             session.pagination.pop(_MENU_PAGE_TMPL.format(node=node_key, field=i), None)
-        # Collected values for this node's fields only
+        # Clear active (flattened) fields
         for f in fields:
             session.collected.pop(f.get("name", ""), None)
+        # Also clear any branch children from previous runs
+        def _clear_raw(raw_fields):
+            for f in raw_fields:
+                if f.get("field_type") == "branch":
+                    _clear_raw(f.get("fields", []))
+                else:
+                    session.collected.pop(f.get("name", ""), None)
+        _clear_raw(node.get("fields", []))
 
     # ── accept helpers (type-dispatch) ───────────────────────────────
 
@@ -396,17 +457,13 @@ class InputHandler(NodeHandler):
         """Build the correct Reply for ``fields[idx]`` based on its type."""
         f          = fields[idx]
         field_type = f.get("field_type", "text")
-        # Only count fields that are actually visible (no skip_if, or skip_if=False)
-        visible_total = sum(
-            1 for fi in fields
-            if not _skip_if(fi, session)
-        )
-        # Visible position of current field (1-based)
-        visible_idx = sum(
-            1 for fi in fields[:idx]
-            if not _skip_if(fi, session)
-        ) + 1
-        total      = visible_total
+        # Use the current flattened list length as total — this reflects exactly
+        # how many fields the user will actually see given their answers so far.
+        # The total may change when a branch resolves (e.g. custom date adds 1
+        # field, or the else-branch removes 1). That is correct and expected:
+        # the step counter shows "N of M" where M is the real remaining work.
+        total       = len(fields)
+        visible_idx = idx + 1
 
         # Header line — "Title - Step N of M" when title is set, else plain "(N/M)"
         def _prefixed(prompt: str) -> str:

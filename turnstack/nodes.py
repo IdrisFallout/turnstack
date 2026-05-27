@@ -370,6 +370,88 @@ class LocationField(BaseField):
         return d
 
 
+@dataclass
+class BranchField:
+    """
+    A conditional group of fields inside an Input node.
+
+    Acts like a :class:`Route` but for fields — when ``when(session)`` returns
+    ``True`` the enclosed fields are injected into the active field sequence at
+    that position; when it returns ``False`` they are silently skipped.
+
+    Unlike ``skip_if`` (which marks individual fields), ``BranchField`` groups
+    a whole set of related fields under a single condition, keeping the form
+    definition readable and logically organised.
+
+    Multiple ``BranchField`` blocks can share the same branch point (e.g. one
+    for each value of an earlier MenuField), giving you Router-style branching
+    inside a single Input node.
+
+    ``BranchField`` objects are *not* ``BaseField`` subclasses — they carry no
+    ``name`` of their own. The InputHandler resolves them at runtime by
+    flattening the active field list before processing each step.
+
+    Args:
+        when:   Callable ``(session: Session) -> bool``.
+                Evaluated once, just before the first field in the branch
+                would be presented.  The full ``session`` (including
+                ``session.collected`` populated so far) is available.
+        fields: Ordered list of field objects to inject when ``when`` is True.
+                Any mix of :class:`Field`, :class:`MenuField`,
+                :class:`ButtonsField`, :class:`ImageField`,
+                :class:`DocumentField`, :class:`LocationField`, or even
+                nested :class:`BranchField` objects.
+
+    Example::
+
+        Input(
+            title="Property Registration",
+            fields=[
+                MenuField("property_type", "What type of property?", options=[
+                    Option("🏠 Residential", value="residential"),
+                    Option("🏢 Commercial",  value="commercial"),
+                ]),
+
+                BranchField(
+                    when=lambda s: s.collected.get("property_type") == "residential",
+                    fields=[
+                        Field("num_bedrooms", "How many bedrooms?"),
+                        ButtonsField("has_parking", "Does it have parking?", options=[
+                            Option("✅ Yes", value="yes"),
+                            Option("❌ No",  value="no"),
+                        ]),
+                    ],
+                ),
+
+                BranchField(
+                    when=lambda s: s.collected.get("property_type") == "commercial",
+                    fields=[
+                        Field("floor_area", "What is the floor area (sqm)?"),
+                        Field("zoning",     "What is the zoning class?"),
+                    ],
+                ),
+
+                Field("asking_price", "What is the asking price (Ksh)?"),
+            ],
+            next="confirm_property",
+        )
+    """
+    when: Callable[..., bool]
+    fields: List[Any]   # List[BaseField | BranchField]
+
+    field_type: str = field(default="branch", init=False, repr=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "field_type": "branch",
+            "when": self.when,
+            "fields": [
+                f.to_dict() if hasattr(f, "to_dict") else f
+                for f in self.fields
+            ],
+        }
+
+
 # ── top-level node classes ────────────────────────────────────────────────────
 
 @dataclass
@@ -612,6 +694,7 @@ __all__ = [
     "ImageField",
     "DocumentField",
     "LocationField",
+    "BranchField",
     # node types
     "BaseNode",
     "Menu",

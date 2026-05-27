@@ -63,6 +63,7 @@ class MediaHandler(NodeHandler):
 
         return Reply(
             type="media",
+            node_type="media",
             body=caption,
             phone=session.user_id,
             file_bytes=file_bytes,

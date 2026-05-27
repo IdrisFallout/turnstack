@@ -653,7 +653,7 @@ class ListNode(BaseNode):
 @dataclass
 class MediaReply(BaseNode):
     """
-    Send a file (PDF, CSV, image, etc.) to the user, then continue the flow.
+    Send a file (PDF, Excel, image, etc.) to the user, then continue the flow.
 
     Args:
         generate:  Callable ``(session, collected) -> bytes``.

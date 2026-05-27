@@ -286,8 +286,8 @@ class BotEngine:
 
         t = node.get("type")
 
-        # router and action nodes run immediately even on first render
-        if t in ("router", "action"):
+        # router, action, and media nodes run immediately even on first render
+        if t in ("router", "action", "media"):
             return await self._dispatch(
                 session,
                 IncomingMessage(user_id=session.user_id, type="text", text=""),

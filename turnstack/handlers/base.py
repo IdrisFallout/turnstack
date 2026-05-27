@@ -125,6 +125,17 @@ class NodeHandler(ABC):
         if t == "list":
             return self._render_list(node, session)
 
+        # Media is a transparent/auto-executing node (like router/action).
+        # It must be dispatched by the engine, never rendered statically.
+        # If we reach here it means _render_current had a gap — surface a
+        # clear error instead of going silent.
+        if t == "media":
+            return self._error(
+                session,
+                "MediaReply node reached _render() — this is a bug. "
+                "Ensure engine._render_current dispatches 'media' directly.",
+            )
+
         return self._error(session, f"Cannot render node type '{t}'.")
 
     def _render_menu(self, node: Dict[str, Any], session: Session) -> Reply:

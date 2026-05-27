@@ -6,11 +6,18 @@ BotEngine — the main entry point.
 Usage::
 
     engine = BotEngine(tree=tree, session_store=InMemorySessionStore())
-    reply  = await engine.process(incoming_message)
+    replies = await engine.process(incoming_message)
+    for reply in replies:
+        await send_whatsapp(reply)
+
+``process()`` always returns a **list** of :class:`Reply` objects.
+In the common case the list has one item.  When a ``media`` node fires,
+the list has two items: the file reply followed immediately by the
+rendered next node — so the developer never has to touch session internals.
 """
 
 from __future__ import annotations
-from typing import Dict, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 from .message import IncomingMessage
 from .reply import Reply
@@ -107,11 +114,17 @@ class BotEngine:
         """
         self._handlers[node_type] = handler
 
-    async def process(self, incoming: IncomingMessage) -> Reply:
+    async def process(self, incoming: IncomingMessage) -> List[Reply]:
         """
-        Process one incoming message and return a Reply.
+        Process one incoming message and return a list of Reply objects.
 
         This is the only public method the developer calls.
+
+        Usually the list contains a single item.  When a ``media`` node
+        fires, the list contains two items: the file reply followed by the
+        rendered follow-up node (e.g. the menu the user lands on after
+        receiving the file).  The developer simply iterates and sends each
+        reply in order — no session introspection required.
         """
         # ── 1. load or create session ─────────────────────────────────
         session = await self.session_store.get(incoming.user_id)
@@ -135,7 +148,7 @@ class BotEngine:
                 )
             entry_reply = self._enrich_menu_reply(entry_reply, session)
             await self.session_store.save(session)
-            return entry_reply
+            return [entry_reply]
 
         # ── 3. touch (activate if new) ────────────────────────────────
         session.touch()
@@ -155,7 +168,7 @@ class BotEngine:
             reply.session_state = session.lifecycle_state
             reply.current_node = session.current_node
             await self.session_store.save(session)
-            return reply
+            return [reply]
 
         # ── 5. new session first message — always render entry node ───
         if session.lifecycle_state == "new" or _is_blank(incoming):
@@ -169,7 +182,7 @@ class BotEngine:
                 )
             reply = self._enrich_menu_reply(reply, session)
             await self.session_store.save(session)
-            return reply
+            return [reply]
 
         # ── 6. INTERCEPT GLOBAL COMMANDS (before dispatch) ────────────
         # Only plain text messages (not interactive selections) can be commands
@@ -188,7 +201,7 @@ class BotEngine:
                 reply.session_state = session.lifecycle_state
                 reply.current_node = session.current_node
                 await self.session_store.save(session)
-                return reply
+                return [reply]
 
         # ── 7. normal dispatch ────────────────────────────────────────
         reply = await self._dispatch(session, incoming)
@@ -205,7 +218,23 @@ class BotEngine:
         reply.session_state = session.lifecycle_state
         reply.current_node  = session.current_node
         await self.session_store.save(session)
-        return reply
+
+        # ── 9. media follow-up: render the next node automatically ────
+        # When a media node fires it sends a file and then advances the
+        # session to `next`.  The user must receive that follow-up node
+        # (usually a menu) as a second message immediately — the engine
+        # handles this so the developer never has to call session_store or
+        # _render_current themselves.
+        if reply.type == "media" and session.current_node:
+            follow_reply = await self._render_current(session)
+            if follow_reply:
+                follow_reply = self._enrich_menu_reply(follow_reply, session)
+                follow_reply.session_state = session.lifecycle_state
+                follow_reply.current_node  = session.current_node
+                await self.session_store.save(session)
+                return [reply, follow_reply]
+
+        return [reply]
 
     # ── internal ──────────────────────────────────────────────────────────
 

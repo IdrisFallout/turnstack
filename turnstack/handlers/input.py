@@ -464,10 +464,14 @@ class InputHandler(NodeHandler):
         # the step counter shows "N of M" where M is the real remaining work.
         total       = len(fields)
         visible_idx = idx + 1
+        title_raw = node.get("title", "") or node.get("intro", "")
+        if callable(title_raw):
+            title = title_raw(session)
+        else:
+            title = title_raw
 
         # Header line — "Title - Step N of M" when title is set, else plain "(N/M)"
         def _prefixed(prompt: str) -> str:
-            title = node.get("title", "") or node.get("intro", "")
             if total > 1:
                 step_label = f"Step {visible_idx} of {total}"
                 header = f"*{title} - {step_label}*" if title else f"({visible_idx}/{total})"

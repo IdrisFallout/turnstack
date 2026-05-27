@@ -122,14 +122,18 @@ class MenuHandler(NodeHandler):
         return None
 
     def _render_menu_page(
-        self,
-        node: Dict[str, Any],
-        session: Session,
-        all_options: list,
-        page: int,
-        total_pages: int,
+            self,
+            node: Dict[str, Any],
+            session: Session,
+            all_options: list,
+            page: int,
+            total_pages: int,
     ) -> Reply:
-        text         = node.get("text", "")
+        text_raw = node.get("text", "")
+        if callable(text_raw):
+            text = text_raw(session)
+        else:
+            text = text_raw
         button_label = node.get("button_label", "Options")
 
         # Reserve slots for pagination rows so total rows never exceed MAX_MENU_ROWS.

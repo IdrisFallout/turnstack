@@ -222,7 +222,11 @@ class ListHandler(NodeHandler):
                     current_node=session.current_node,
                 )
 
-        title = node.get("title", "Select an option")
+        title_raw = node.get("title", "Select an option")
+        if callable(title_raw):
+            title = title_raw(session)
+        else:
+            title = title_raw
         item_label_fn = node.get("item_label", str)
         item_desc_fn = node.get("item_description")
         extra_opts = node.get("extra_options", [])

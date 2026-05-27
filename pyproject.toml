@@ -1,7 +1,7 @@
 [project]
 name = "turnstack"
 version = "0.1.0"
-description = "Code-first, self-hosted WhatsApp flow engine"
+description = "WhatsApp bot engine with node‑based flows and interactive replies"
 authors = [{ name = "IdrisFallout", email = "dev@waithakasam.com" }]
 license = { text = "MIT" }
 readme = "README.md"

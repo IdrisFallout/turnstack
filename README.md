@@ -636,7 +636,7 @@ from turnstack.stores.memory import InMemorySessionStore
 engine = BotEngine(
     tree             = tree,
     session_store    = InMemorySessionStore(),  # default
-    session_timeout  = 300,                     # seconds of inactivity before expiry
+    session_timeout  = 1800,                     # seconds of inactivity before expiry
     back_keywords    = {"0", "back", "go back"},
     home_keywords    = {"00", "home", "menu", "start over"},
     exit_keywords    = {"000", "exit", "quit", "reset", "goodbye", "bye"},
@@ -885,7 +885,7 @@ import json
 
 class RedisSessionStore(SessionStore):
 
-    def __init__(self, redis_client, timeout: int = 300):
+    def __init__(self, redis_client, timeout: int = 1800):
         self.redis   = redis_client
         self.timeout = timeout
 
@@ -909,7 +909,7 @@ class RedisSessionStore(SessionStore):
 Pass it to the engine:
 
 ```python
-engine = BotEngine(tree=tree, session_store=RedisSessionStore(redis, timeout=300))
+engine = BotEngine(tree=tree, session_store=RedisSessionStore(redis, timeout=1800))
 ```
 
 ---
@@ -976,24 +976,43 @@ async def send(user_id: str, phone: str, reply: Reply):
         }
 
     elif reply.node_type in ("menu", "list"):
-        # Interactive list
-        rows = [
-            {"id": opt.value, "title": opt.label[:24], "description": opt.description[:72]}
-            for opt in reply.options
-        ]
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": phone,
-            "type": "interactive",
-            "interactive": {
-                "type": "list",
-                "body": {"text": reply.body},
-                "action": {
-                    "button": reply.meta.get("button_label", "Options"),
-                    "sections": [{"title": "Options", "rows": rows}],
-                },
-            },
-        }
+       # Interactive list from ListNode (sections in meta) or regular menu (options)
+       if reply.meta.get("sections"):
+           # ListNode interactive mode – use pre-built sections
+           sections = reply.meta["sections"]
+           button_label = reply.meta.get("button_label", "Options")
+           payload = {
+               "messaging_product": "whatsapp",
+               "to": phone,
+               "type": "interactive",
+               "interactive": {
+                   "type": "list",
+                   "body": {"text": reply.body},
+                   "action": {
+                       "button": button_label,
+                       "sections": sections,
+                   },
+               },
+           }
+       else:
+           # Regular menu – build rows from reply.options
+           rows = [
+               {"id": opt.value, "title": opt.label[:24], "description": opt.description[:72]}
+               for opt in reply.options
+           ]
+           payload = {
+               "messaging_product": "whatsapp",
+               "to": phone,
+               "type": "interactive",
+               "interactive": {
+                   "type": "list",
+                   "body": {"text": reply.body},
+                   "action": {
+                       "button": reply.meta.get("button_label", "Options"),
+                       "sections": [{"title": "Options", "rows": rows}],
+                   },
+               },
+           }
 
     elif reply.node_type in ("confirm", "input_buttons"):
         # Interactive buttons
@@ -1672,18 +1691,42 @@ async def send_whatsapp(user_id: str, phone: str, reply):
         payload = {"messaging_product": "whatsapp", "to": phone, "type": "text",
                    "text": {"body": f"[File: {reply.filename}] {reply.body}"}}
 
+
     elif reply.node_type in ("menu", "list"):
-        rows = [{"id": o.value, "title": o.label[:24]} for o in reply.options]
-        payload = {
-            "messaging_product": "whatsapp", "to": phone, "type": "interactive",
-            "interactive": {
-                "type": "list", "body": {"text": reply.body},
-                "action": {
-                    "button": reply.meta.get("button_label", "Options"),
-                    "sections": [{"title": "Options", "rows": rows}],
+        # Interactive list from ListNode (sections in meta) or regular menu (options)
+        if reply.meta.get("sections"):
+            # ListNode interactive mode – use pre-built sections
+            sections = reply.meta["sections"]
+            button_label = reply.meta.get("button_label", "Options")
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "body": {"text": reply.body},
+                    "action": {
+                        "button": button_label,
+                        "sections": sections,
+                    },
                 },
-            },
-        }
+            }
+        else:
+            # Regular menu – build rows from reply.options
+            rows = [{"id": o.value, "title": o.label[:24]} for o in reply.options]
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "body": {"text": reply.body},
+                    "action": {
+                        "button": reply.meta.get("button_label", "Options"),
+                        "sections": [{"title": "Options", "rows": rows}],
+                    },
+                },
+            }
 
     elif reply.node_type in ("confirm", "input_buttons"):
         buttons = [{"type": "reply", "reply": {"id": o.value, "title": o.label[:20]}}
@@ -1718,14 +1761,14 @@ async def send_whatsapp(user_id: str, phone: str, reply):
 
 app = FastAPI()
 
-@app.get("/webhook/whatsapp")
+@app.get("/webhooks/whatsapp")
 async def verify(request: Request):
     p = request.query_params
     if p.get("hub.mode") == "subscribe" and p.get("hub.verify_token") == os.getenv("WA_VERIFY_TOKEN"):
         return Response(content=p.get("hub.challenge"), media_type="text/plain")
     raise HTTPException(403)
 
-@app.post("/webhook/whatsapp")
+@app.post("/webhooks/whatsapp")
 async def webhook(request: Request):
     raw = await request.json()
     try:

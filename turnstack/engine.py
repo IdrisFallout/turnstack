@@ -47,7 +47,7 @@ class BotEngine:
     tree:            A validated :class:`FlowTree`.
     session_store:   Optional :class:`SessionStore` implementation.
                      Defaults to :class:`InMemorySessionStore` (dev/testing).
-    session_timeout: Seconds of inactivity before a session expires. Default: 300.
+    session_timeout: Seconds of inactivity before a session expires. Default: 1800.
     back_keywords:   Set of text strings that trigger "go back" (default: {"0","back","go back"}).
     home_keywords:   Set of text strings that trigger "go home" (default: {"00","home","main menu","start over"}).
     exit_keywords:   Set of text strings that trigger "exit/reset session" (default: {"exit","quit","reset","goodbye"}).
@@ -65,7 +65,7 @@ class BotEngine:
         self,
         tree: FlowTree,
         session_store: Optional[SessionStore] = None,
-        session_timeout: int = 300,
+        session_timeout: int = 1800,
         back_keywords: Optional[Set[str]] = None,
         home_keywords: Optional[Set[str]] = None,
         exit_keywords: Optional[Set[str]] = None,

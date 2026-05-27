@@ -14,7 +14,7 @@ class InMemorySessionStore(SessionStore):
     For production with high concurrency, consider a persistent store (Redis, SQLite).
     """
 
-    def __init__(self, session_timeout: int = 300, max_sessions: int = 10000):
+    def __init__(self, session_timeout: int = 1800, max_sessions: int = 10000):
         self._sessions: Dict[str, Session] = {}
         self.session_timeout = session_timeout
         self.max_sessions = max_sessions

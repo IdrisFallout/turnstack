@@ -189,6 +189,8 @@ class BotEngine:
         if incoming.type == "text" and incoming.text:
             cmd_reply = await self._handle_global_command(session, incoming.text.strip().lower())
             if cmd_reply:
+                if cmd_reply.type == "end":
+                    return [cmd_reply]
                 # Command handled – render the resulting node
                 reply = await self._render_current(session)
                 if reply is None:
@@ -246,14 +248,13 @@ class BotEngine:
         """
         # Exit / reset
         if text in self.exit_keywords:
-            session.reset(self.tree.entry)
-            # Optionally send a goodbye message (could be configured)
+            await self.session_store.delete(session.user_id)
             return Reply(
-                type="text",
-                body="👋 Session reset. Type anything to start over.",
+                type="end",
+                body="👋 Goodbye! Send us a message anytime to start a new session.",
                 phone=session.user_id,
                 node_type="text",
-                current_node=session.current_node,
+                current_node=None,
             )
 
         # Go home

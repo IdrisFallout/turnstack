@@ -1,6 +1,6 @@
 [project]
 name = "turnstack"
-version = "0.1.0"
+version = "0.1.1"
 description = "WhatsApp bot engine with node-based flows and interactive replies"
 authors = [{ name = "IdrisFallout", email = "dev@waithakasam.com" }]
 license = { text = "MIT" }

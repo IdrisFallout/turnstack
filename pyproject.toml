@@ -1,13 +1,30 @@
 [project]
 name = "turnstack"
 version = "0.1.0"
-description = "WhatsApp bot engine with node‑based flows and interactive replies"
+description = "WhatsApp bot engine with node-based flows and interactive replies"
 authors = [{ name = "IdrisFallout", email = "dev@waithakasam.com" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["whatsapp", "bot", "chatbot", "flow", "engine"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/IdrisFallout/turnstack"
+Repository = "https://github.com/IdrisFallout/turnstack"
+"Bug Tracker" = "https://github.com/IdrisFallout/turnstack/issues"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["turnstack*"]

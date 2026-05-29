@@ -214,6 +214,24 @@ class BotEngine:
                 phone=session.user_id,
                 current_node=session.current_node,
             )
+
+        # ── 7a. action two-message split ──────────────────────────────
+        # ActionHandler tags the reply with _action_replies=[action_reply, next_reply]
+        # when the fn returned text/Reply.  Unwrap them and send as two
+        # separate messages so the action text and the follow-up node
+        # always arrive as distinct WhatsApp bubbles.
+        from .handlers.action import ActionHandler
+        action_pair = getattr(reply, ActionHandler.MULTI_REPLY_ATTR, None)
+        if action_pair and len(action_pair) == 2:
+            action_reply, next_reply = action_pair
+            next_reply = self._enrich_menu_reply(next_reply, session)
+            action_reply.session_state = session.lifecycle_state
+            action_reply.current_node  = session.current_node
+            next_reply.session_state   = session.lifecycle_state
+            next_reply.current_node    = session.current_node
+            await self.session_store.save(session)
+            return [action_reply, next_reply]
+
         reply = self._enrich_menu_reply(reply, session)
 
         # ── 8. attach meta and save ───────────────────────────────────

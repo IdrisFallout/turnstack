@@ -1,6 +1,6 @@
 from __future__ import annotations
 import inspect
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict, List, TYPE_CHECKING
 
 from ..message import IncomingMessage
 from ..reply import Reply
@@ -16,13 +16,20 @@ class ActionHandler(NodeHandler):
     Handles ``action`` nodes.
 
     The developer's ``fn`` may return:
-    - A ``str``   — sent as a text message, then the flow advances to ``next``.
+    - A ``str``   — sent as a separate text message, then the next node is
+                    sent as a second message.
     - A ``Reply`` — used as-is (allows sending media, ending session, etc.),
-                    then the flow advances to ``next``.
-    - ``None``    — nothing extra is sent; the flow advances to ``next``.
+                    then the next node is sent as a second message.
+    - ``None``    — nothing extra is sent; only the next node reply is sent.
 
     Both sync and async functions are supported.
+
+    The engine receives a list and sends each reply in order, so the action
+    text and the follow-up node always arrive as two distinct messages.
     """
+
+    # Sentinel attribute the engine checks to unwrap multi-reply actions.
+    MULTI_REPLY_ATTR = "_action_replies"
 
     async def handle(
         self,
@@ -65,39 +72,28 @@ class ActionHandler(NodeHandler):
 
         self._transition_to(session, next_key)
 
-        # ── build the combined reply ──────────────────────────────────
-        # Enter next node (may chain another action/router silently)
+        # ── get next node reply ───────────────────────────────────────
         next_reply = await self._enter_node(session, tree, _depth + 1)
         if next_reply is None:
             next_reply = self._error(session, "Next node returned no reply.")
 
+        # ── no action text → just return next reply as usual ─────────
+        if result is None:
+            return next_reply
+
+        # ── action produced text or a Reply → send as TWO messages ───
+        # We attach the pair on the reply object; engine.py unwraps it.
         if isinstance(result, Reply):
-            # Developer returned a full Reply — send it, then queue next render
-            # We concatenate bodies so the user sees both in one message
-            if next_reply.body:
-                result.body = result.body + "\n\n" + next_reply.body
-            result.current_node = next_reply.current_node
-            result.options = next_reply.options
-            result.node_type = next_reply.node_type
-            return result
-
-        # Developer returned a str or None
-        action_text = str(result) if result is not None else ""
-        if action_text and next_reply.body:
-            combined = action_text + "\n\n" + next_reply.body
-        elif action_text:
-            combined = action_text
+            action_reply = result
         else:
-            combined = next_reply.body
+            action_reply = Reply(
+                type="text",
+                body=str(result),
+                phone=session.user_id,
+                current_node=session.current_node,
+            )
 
-        return Reply(
-            type=next_reply.type,
-            body=combined,
-            phone=session.user_id,
-            options=next_reply.options,
-            node_type=next_reply.node_type,
-            file_bytes=next_reply.file_bytes,
-            filename=next_reply.filename,
-            mime_type=next_reply.mime_type,
-            current_node=next_reply.current_node,
-        )
+        # Carry options/node_type only on the SECOND (next_reply) message.
+        # Tag the first reply so the engine knows to split them.
+        setattr(action_reply, self.MULTI_REPLY_ATTR, [action_reply, next_reply])
+        return action_reply
